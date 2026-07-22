@@ -256,11 +256,11 @@ function defaultState(){
   return {
     people:{ p1:'Matheus', p2:'Jayane' },
     tasks:[
-      {id:uid(), name:'Tirar o lixo', room:'geral', responsible:'both', freq:{type:'weekdays', days:[1,3,5]}, active:true},
-      {id:uid(), name:'Lavar roupa', room:'cozinha', responsible:'both', freq:{type:'interval', every:7, start:today}, active:true},
+      {id:uid(), name:'Tirar o lixo', room:'geral', responsible:'both', rotation:{mode:'alternating', first:'p1', start:today}, freq:{type:'weekdays', days:[1,3,5]}, active:true},
+      {id:uid(), name:'Lavar roupa', room:'cozinha', responsible:'both', rotation:{mode:'alternating', first:'p2', start:today}, freq:{type:'interval', every:7, start:today}, active:true},
       {id:uid(), name:'Regar plantas', room:'geral', responsible:'p2', freq:{type:'weekdays', days:[0]}, active:true},
       {id:uid(), name:'Limpar banheiro social', room:'banheiro', responsible:'p1', freq:{type:'interval', every:14, start:today}, active:true},
-      {id:uid(), name:'Trocar roupa de cama', room:'suite', responsible:'both', freq:{type:'monthly', day:15}, active:true},
+      {id:uid(), name:'Trocar roupa de cama', room:'suite', responsible:'both', rotation:{mode:'random'}, freq:{type:'monthly', day:15}, active:true},
     ],
     completions:{}
   };
@@ -324,11 +324,73 @@ function describeFreq(f){
   return '';
 }
 
+function describeRotation(t){
+  const rot = t.rotation || {mode:'random'};
+  if(rot.mode==='alternating'){
+    const firstName = rot.first==='p2' ? state.people.p2 : state.people.p1;
+    let startTxt = '';
+    if(rot.start){ const [y,m,d]=rot.start.split('-'); startTxt = ' desde '+d+'/'+m+'/'+y; }
+    return '🔁 Revezando (começa '+esc(firstName)+startTxt+')';
+  }
+  return '🎲 Sorteio por data';
+}
+
+/* Resolves "Ambos" into a concrete person for a specific date, so the agenda
+   always shows one clear responsible instead of a vague "Ambos". */
+function resolveResponsible(task, iso){
+  if(task.responsible !== 'both') return task.responsible;
+  const rot = task.rotation || {mode:'random'};
+  if(rot.mode === 'alternating'){
+    const start = rot.start || iso;
+    const first = rot.first || 'p1';
+    if(iso < start) return first;
+    const idx = occurrenceIndexSince(task, start, iso);
+    if(idx < 0) return first;
+    const other = first==='p1' ? 'p2' : 'p1';
+    return (idx % 2 === 0) ? first : other;
+  }
+  // "random" mode: deterministic per task+date, so it doesn't reshuffle on every reload
+  const h = hashStr(task.id+'|'+iso);
+  return (h % 2 === 0) ? 'p1' : 'p2';
+}
+
+// counts how many due occurrences of `task` fall between startISO and targetISO (inclusive),
+// returning the 0-based index of the targetISO occurrence. Capped at ~10 years for safety.
+function occurrenceIndexSince(task, startISO, targetISO){
+  let count = -1;
+  let cur = fromISO(startISO);
+  const target = fromISO(targetISO);
+  let iter = 0;
+  const MAX_ITER = 3660;
+  while(cur <= target && iter < MAX_ITER){
+    if(isDue(task, toISO(cur))) count++;
+    cur = addDays(cur, 1);
+    iter++;
+  }
+  return count;
+}
+
+function hashStr(s){
+  let h = 0;
+  for(let i=0;i<s.length;i++){ h = (h*31 + s.charCodeAt(i)) | 0; }
+  return Math.abs(h);
+}
+
 function respChip(responsible){
   const p = state.people;
   if(responsible==='p1') return '<span class="chip p1">● '+esc(p.p1)+'</span>';
   if(responsible==='p2') return '<span class="chip p2">● '+esc(p.p2)+'</span>';
   return '<span class="chip both">● Ambos</span>';
+}
+
+// like respChip, but for "Ambos" tasks it resolves and shows the actual person for that date
+function respChipForDate(task, iso){
+  const person = resolveResponsible(task, iso);
+  const label = person==='p2' ? state.people.p2 : state.people.p1;
+  const mark = task.responsible==='both'
+    ? ((task.rotation && task.rotation.mode==='random') ? ' 🎲' : ' 🔁')
+    : '';
+  return '<span class="chip '+person+'">● '+esc(label)+mark+'</span>';
 }
 
 function esc(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -391,7 +453,7 @@ function taskCardTpl(t){
   <div class="task-card">
     <div class="task-main">
       <p class="task-name">${esc(t.name)}</p>
-      <div class="task-meta">${respChip(t.responsible)}<span>${describeFreq(t.freq)}</span></div>
+      <div class="task-meta">${respChip(t.responsible)}<span>${describeFreq(t.freq)}</span>${t.responsible==='both' ? '<span>'+describeRotation(t)+'</span>' : ''}</div>
     </div>
     <div class="task-actions">
       <button class="icon-btn" data-action="edit-task" data-id="${t.id}" aria-label="Editar">✎</button>
@@ -409,6 +471,10 @@ function formTpl(){
   const wdChecked = (n)=> (f.type==='weekdays' && f.days.includes(n)) ? 'checked' : '';
   const respVal = editing ? editing.responsible : 'both';
   const p = state.people;
+  const rot = (editing && editing.responsible==='both') ? (editing.rotation || {mode:'random'}) : {mode:'alternating', first:'p1', start:today};
+  const rotationMode = rot.mode || 'alternating';
+  const rotationFirst = rot.first || 'p1';
+  const rotationStart = rot.start || today;
   return `
   <div class="form-panel">
     <h3>${editing ? 'Editar tarefa' : 'Nova tarefa'}</h3>
@@ -431,6 +497,38 @@ function formTpl(){
           <label><input type="radio" name="responsible" value="both" ${respVal==='both'?'checked':''}> Ambos</label>
         </div>
       </div>
+
+      <div class="rotation-block ${respVal!=='both'?'hidden':''}" data-rotation-block>
+        <div class="field">
+          <label>Como dividir entre ${esc(p.p1)} e ${esc(p.p2)}</label>
+          <div class="radio-row">
+            <label><input type="radio" name="rotationMode" value="alternating" ${rotationMode==='alternating'?'checked':''}> Revezar automaticamente</label>
+            <label><input type="radio" name="rotationMode" value="random" ${rotationMode==='random'?'checked':''}> Sortear por data</label>
+          </div>
+        </div>
+
+        <div class="rotation-sub ${rotationMode!=='alternating'?'hidden':''}" data-rotation-sub="alternating">
+          <div class="inline-2">
+            <div class="field">
+              <label>Quem começa</label>
+              <div class="radio-row">
+                <label><input type="radio" name="rotationFirst" value="p1" ${rotationFirst==='p1'?'checked':''}> ${esc(p.p1)}</label>
+                <label><input type="radio" name="rotationFirst" value="p2" ${rotationFirst==='p2'?'checked':''}> ${esc(p.p2)}</label>
+              </div>
+            </div>
+            <div class="field">
+              <label>A partir de</label>
+              <input type="date" id="rotationStart" value="${rotationStart}">
+            </div>
+          </div>
+          <p class="helper">Alterna a cada vez que a tarefa vence, começando por quem você escolher.</p>
+        </div>
+
+        <div class="rotation-sub ${rotationMode!=='random'?'hidden':''}" data-rotation-sub="random">
+          <p class="helper">A pessoa é sorteada automaticamente pra cada data — o resultado é fixo, não muda se a página recarregar.</p>
+        </div>
+      </div>
+
       <div class="field">
         <label>Frequência</label>
         <select id="freqType">
@@ -523,7 +621,7 @@ function agendaRowTpl(t, iso){
     <input type="checkbox" data-action="toggle-complete" data-id="${t.id}" data-date="${iso}" ${done?'checked':''}>
     <div>
       <div class="name">${esc(t.name)}</div>
-      <div class="meta">${room ? room.icon+' '+room.label : ''} ${respChip(t.responsible)}</div>
+      <div class="meta">${room ? room.icon+' '+room.label : ''} ${respChipForDate(t, iso)}</div>
     </div>
   </label>`;
 }
@@ -573,6 +671,16 @@ document.addEventListener('change', (e)=>{
     const dayInput = document.getElementById('monthlyDay');
     if(dayInput) dayInput.disabled = e.target.checked;
   }
+  if(e.target.name==='responsible'){
+    const block = document.querySelector('[data-rotation-block]');
+    if(block) block.classList.toggle('hidden', e.target.value !== 'both');
+  }
+  if(e.target.name==='rotationMode'){
+    const val = e.target.value;
+    document.querySelectorAll('[data-rotation-sub]').forEach(sec=>{
+      sec.classList.toggle('hidden', sec.dataset.rotationSub !== val);
+    });
+  }
   if(e.target.dataset && e.target.dataset.action==='toggle-complete'){
     const key = e.target.dataset.id+'__'+e.target.dataset.date;
     if(e.target.checked) state.completions[key] = true; else delete state.completions[key];
@@ -604,6 +712,18 @@ document.addEventListener('submit', (e)=>{
   const responsible = document.querySelector('input[name=responsible]:checked').value;
   const freqType = document.getElementById('freqType').value;
 
+  let rotation = null;
+  if(responsible === 'both'){
+    const mode = document.querySelector('input[name=rotationMode]:checked')?.value || 'alternating';
+    if(mode === 'alternating'){
+      const first = document.querySelector('input[name=rotationFirst]:checked')?.value || 'p1';
+      const start = document.getElementById('rotationStart').value || toISO(todayDate());
+      rotation = {mode:'alternating', first, start};
+    } else {
+      rotation = {mode:'random'};
+    }
+  }
+
   let freq;
   if(freqType==='weekdays'){
     const days = Array.from(document.querySelectorAll('input[name=wd]:checked')).map(i=>parseInt(i.value,10));
@@ -630,9 +750,9 @@ document.addEventListener('submit', (e)=>{
 
   if(ui.editingTaskId){
     const t = state.tasks.find(t=>t.id===ui.editingTaskId);
-    Object.assign(t, {name, room, responsible, freq});
+    Object.assign(t, {name, room, responsible, freq, rotation});
   } else {
-    state.tasks.push({id:uid(), name, room, responsible, freq, active:true});
+    state.tasks.push({id:uid(), name, room, responsible, freq, rotation, active:true});
   }
   ui.formOpen=false; ui.editingTaskId=null;
   saveState(); render();
