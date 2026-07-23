@@ -108,7 +108,7 @@ def send_ntfy(message: str, title: str):
         url,
         data=message.encode("utf-8"),
         method="POST",
-        headers={"Title": title},
+        headers={"Title": title, "Click": TAREFAS_URL},
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         resp.read()
