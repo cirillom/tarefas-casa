@@ -35,6 +35,26 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
+@app.route("/manifest.json")
+def manifest():
+    return send_from_directory(STATIC_DIR, "manifest.json")
+
+
+@app.route("/sw.js")
+def service_worker():
+    return send_from_directory(STATIC_DIR, "sw.js")
+
+
+@app.route("/icon-192.png")
+def icon_192():
+    return send_from_directory(STATIC_DIR, "icon-192.png")
+
+
+@app.route("/icon-512.png")
+def icon_512():
+    return send_from_directory(STATIC_DIR, "icon-512.png")
+
+
 @app.route("/api/kv/<key>", methods=["GET"])
 def get_kv(key):
     conn = get_conn()
