@@ -182,6 +182,11 @@
   }
   .day-head .progress{font-size:12px;color:var(--ink-soft);}
   .day-card.today .day-head .when{color:var(--sage);}
+  .day-head .when.overdue-when{color:var(--danger);}
+  .tag.danger{background:var(--danger-soft);color:var(--danger);}
+  .day-tasks.overdue{border-left:2px dashed var(--danger);}
+  .overdue-date{font-weight:400;color:var(--danger);}
+  .overdue-block{margin-bottom:22px;}
   .day-tasks{border-left:2px dashed var(--line-strong);margin-left:6px;padding-left:14px;}
   .day-tasks.empty{border-left:2px dashed var(--line);}
   .no-tasks-note{font-size:12.5px;color:var(--ink-soft);padding:6px 0;}
@@ -586,9 +591,53 @@ function formTpl(){
   </div>`;
 }
 
+const OVERDUE_LOOKBACK_DAYS = 60;
+
+function getOverdueItems(){
+  const today = todayDate();
+  const active = state.tasks.filter(t=>t.active!==false);
+  const results = [];
+  for(let i=1;i<=OVERDUE_LOOKBACK_DAYS;i++){
+    const iso = toISO(addDays(today, -i));
+    active.forEach(t=>{
+      if(isDue(t, iso) && !state.completions[t.id+'__'+iso]) results.push({task:t, iso});
+    });
+  }
+  results.sort((a,b)=> a.iso < b.iso ? 1 : -1); // mais recente primeiro
+  return results;
+}
+
+function overdueTpl(){
+  const overdue = getOverdueItems();
+  if(overdue.length===0) return '';
+  return `<div class="day-card overdue-block">
+    <div class="day-head">
+      <span class="when overdue-when">⚠ Atrasadas <span class="tag danger">${overdue.length}</span></span>
+    </div>
+    <div class="day-tasks overdue">
+      ${overdue.map(o=>overdueRowTpl(o.task, o.iso)).join('')}
+    </div>
+  </div>`;
+}
+
+function overdueRowTpl(t, iso){
+  const room = ROOMS.find(r=>r.id===t.room);
+  const d = fromISO(iso);
+  const dateLabel = pad(d.getDate())+'/'+pad(d.getMonth()+1);
+  return `
+  <label class="agenda-row">
+    <input type="checkbox" data-action="toggle-complete" data-id="${t.id}" data-date="${iso}">
+    <div>
+      <div class="name">${esc(t.name)} <span class="overdue-date">· venceu ${dateLabel}</span></div>
+      <div class="meta">${room ? room.icon+' '+room.label : ''} ${respChipForDate(t, iso)}</div>
+    </div>
+  </label>`;
+}
+
 function agendaTpl(){
   const ranges = [7,14,30];
-  let html = `<div class="range-row">
+  let html = overdueTpl();
+  html += `<div class="range-row">
     ${ranges.map(r=>`<button data-action="set-range" data-range="${r}" class="${ui.rangeDays===r?'active':''}">${r} dias</button>`).join('')}
   </div>`;
   const base = todayDate();
